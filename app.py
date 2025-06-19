@@ -3,13 +3,14 @@ import pandas as pd
 from docx import Document
 from PyPDF2 import PdfReader
 from fuzzywuzzy import fuzz
+import re
 
-# Extract text from a DOCX resume file
+# Extract text content from DOCX resumes
 def extract_text_from_docx(file):
     doc = Document(file)
     return " ".join(para.text for para in doc.paragraphs)
 
-# Extract text from a PDF resume file
+# Extract text content from PDF resumes
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
     text = []
@@ -19,67 +20,79 @@ def extract_text_from_pdf(file):
             text.append(extracted)
     return " ".join(text)
 
-# Evaluate how well a resume matches a job position using fuzzy matching
+# Extract years of experience from text, ignoring internships
+def extract_experience(text):
+    experience_matches = re.findall(r'(\d+)[+]?\s+years?', text.lower())
+    years = [int(y) for y in experience_matches if y.isdigit()]
+    return max(years) if years else 0
+
+# Match resume content to essential QRs and calculate match percentage
+def match_essential_qrs(text, qr_list):
+    matched_qrs = [qr.strip() for qr in qr_list if fuzz.token_set_ratio(qr.strip().lower(), text.lower()) > 70]
+    match_percent = len(matched_qrs) / len(qr_list) if qr_list else 0
+    return matched_qrs, match_percent >= 0.6
+
+# Try to infer location from the top lines of the resume
+def infer_location(text):
+    lines = text.split('\n')
+    for line in lines[:5]:
+        if any(city in line.lower() for city in ["pune", "bangalore", "delhi", "mumbai", "hyderabad"]):
+            return line.lower()
+    return ""
+
+# Score a resume against a job position
+
 def match_resume_to_position(text, position_row):
+    location_score = 0
+    experience_score = 0
     qr_score = 0
-    exp_score = 0
-    loc_score = 0
-    position_score = 0
 
-    # Split essential qualifications into individual keywords/phrases
+    expected_location = str(position_row['Location']).lower()
+    inferred_location = infer_location(text)
+    if expected_location in text.lower() or expected_location in inferred_location:
+        location_score = 1
+
+    actual_experience = extract_experience(text)
+    expected_experience = int(re.findall(r'\d+', str(position_row['Experience']))[0]) if re.findall(r'\d+', str(position_row['Experience'])) else 0
+    if abs(actual_experience - expected_experience) <= 1:
+        experience_score = 1
+
     qr_keywords = str(position_row['Essential QRs']).split(',')
-    for keyword in qr_keywords:
-        # Increase QR score if the keyword matches with the resume text
-        if fuzz.token_set_ratio(keyword.lower().strip(), text.lower()) > 70:
-            qr_score += 1
+    matched_qrs, qr_met = match_essential_qrs(text, qr_keywords)
+    if qr_met:
+        qr_score = 1
 
-    # Score experience match
-    if fuzz.partial_ratio(str(position_row['Experience']).lower(), text.lower()) > 70:
-        exp_score = 1
+    total_score = location_score + experience_score + qr_score
+    decision = "Use" if total_score == 3 else "Do Not Use"
 
-    # Score location match
-    if fuzz.partial_ratio(str(position_row['Location']).lower(), text.lower()) > 70:
-        loc_score = 1
+    return location_score, experience_score, qr_score, decision, matched_qrs
 
-    # Score job title match
-    if fuzz.token_set_ratio(str(position_row['Position Title']).lower(), text.lower()) > 70:
-        position_score = 1
+# App title
+st.title("\ud83d\udcc4 Resume to Position Matcher (Enhanced)")
 
-    # Calculate total match score
-    total_score = qr_score + exp_score + loc_score + position_score
-    return total_score
-
-# Set up the Streamlit app interface
-title_text = "📄 Resume to Position Matcher"
-st.title(title_text)
-
-# Upload Excel file containing job positions
+# File uploader for Excel checklist
 checklist_file = st.file_uploader(
     "Upload Position Checklist (Excel with columns: Position Title, Essential QRs, Experience, Location)",
     type=["xlsx"]
 )
 
-# Upload multiple resumes
+# File uploader for multiple resume files
 resume_files = st.file_uploader(
     "Upload Resumes (PDF/DOCX)",
     type=["pdf", "docx"],
     accept_multiple_files=True
 )
 
-# If both uploads are provided, start processing
+# Main matching logic
 if checklist_file and resume_files:
-    # Load job positions data from Excel
     df_positions = pd.read_excel(checklist_file)
 
-    # Display job positions table
     st.write("### Job Positions Loaded")
     st.dataframe(df_positions)
 
     results = []
 
-    # Loop through each uploaded resume
     for resume in resume_files:
-        # Extract text depending on file type
         if resume.name.lower().endswith(".pdf"):
             text = extract_text_from_pdf(resume)
         elif resume.name.lower().endswith(".docx"):
@@ -89,29 +102,36 @@ if checklist_file and resume_files:
 
         best_match = None
         best_score = -1
+        best_data = None
 
-        # Compare resume against each position
+        # Compare resume to each job position and keep the best match
         for _, row in df_positions.iterrows():
-            score = match_resume_to_position(text, row)
+            loc_score, exp_score, qr_score, decision, matched_qrs = match_resume_to_position(text, row)
+            score = loc_score + exp_score + qr_score
             if score > best_score:
                 best_score = score
                 best_match = row['Position Title']
+                best_data = (loc_score, exp_score, qr_score, decision, matched_qrs)
 
-        # Save results for this resume
-        results.append({
-            "File Name": resume.name,
-            "Best Match Position": best_match,
-            "Score": best_score
-        })
+        # Store final decision and component scores
+        if best_data:
+            loc_score, exp_score, qr_score, decision, matched_qrs = best_data
+            results.append({
+                "File Name": resume.name,
+                "Best Match Position": best_match,
+                "Location Match": "✅" if loc_score else "❌",
+                "Experience Match": "✅" if exp_score else "❌",
+                "QR Match": "✅" if qr_score else "❌",
+                "Decision": decision,
+                "Matched QRs": ", ".join(matched_qrs)
+            })
 
-    # Create DataFrame of all results
+    # Display and download final results
     results_df = pd.DataFrame(results)
 
-    # Display the matching results
     st.write("### Resume to Position Matching Results")
     st.dataframe(results_df)
 
-    # Allow user to download the results as a CSV file
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download Results as CSV",
