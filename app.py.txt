@@ -62,9 +62,3 @@ if checklist_file and resume_files:
 
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Results as CSV", data=csv, file_name="resume_evaluation_results.csv", mime="text/csv")
-streamlit
-pandas
-python-docx
-PyPDF2
-fuzzywuzzy
-openpyxl
