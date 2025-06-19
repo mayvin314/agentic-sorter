@@ -41,7 +41,6 @@ def infer_location(text):
     return ""
 
 # Score a resume against a job position
-
 def match_resume_to_position(text, position_row):
     location_score = 0
     experience_score = 0
@@ -68,7 +67,7 @@ def match_resume_to_position(text, position_row):
     return location_score, experience_score, qr_score, decision, matched_qrs
 
 # App title
-st.title("\ud83d\udcc4 Resume to Position Matcher (Enhanced)")
+st.title("📄 Resume to Position Matcher (Enhanced)")
 
 # File uploader for Excel checklist
 checklist_file = st.file_uploader(
