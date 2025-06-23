@@ -5,7 +5,7 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer, util
 import re
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
+model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
 def extract_text_from_docx(file):
     doc = Document(file)
@@ -71,7 +71,7 @@ def match_resume_to_position(text, position_row, threshold):
 
     return location_score, experience_score, qr_score, decision, matched_qrs, int(match_percent * 100)
 
-st.title("\ud83d\udcc4 Resume to Position Matcher (Semantic Enhanced)")
+st.title("Resume to Position Matcher (Semantic Enhanced)")
 
 threshold = st.slider("Set QR Matching Threshold (Cosine Similarity)", 0.0, 1.0, 0.6, 0.01)
 
