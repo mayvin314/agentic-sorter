@@ -5,7 +5,7 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer, util
 import re
 
-model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_docx(file):
     doc = Document(file)
