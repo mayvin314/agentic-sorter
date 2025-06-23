@@ -2,15 +2,18 @@ import streamlit as st
 import pandas as pd
 from docx import Document
 from PyPDF2 import PdfReader
-from fuzzywuzzy import fuzz
+from sentence_transformers import SentenceTransformer, util
 import re
 
-# Extract text content from DOCX resumes
+# Load embedding model from Hugging Face
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Extract text from DOCX file
 def extract_text_from_docx(file):
     doc = Document(file)
     return " ".join(para.text for para in doc.paragraphs)
 
-# Extract text content from PDF resumes
+# Extract text from PDF file
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
     text = []
@@ -20,19 +23,13 @@ def extract_text_from_pdf(file):
             text.append(extracted)
     return " ".join(text)
 
-# Extract years of experience from text, ignoring internships
+# Extract experience from resume text
 def extract_experience(text):
-    experience_matches = re.findall(r'(\d+)[+]?\s+years?', text.lower())
+    experience_matches = re.findall(r'(\d+)[+]?\\s+years?', text.lower())
     years = [int(y) for y in experience_matches if y.isdigit()]
     return max(years) if years else 0
 
-# Match resume content to essential QRs and calculate match percentage
-def match_essential_qrs(text, qr_list):
-    matched_qrs = [qr.strip() for qr in qr_list if fuzz.token_set_ratio(qr.strip().lower(), text.lower()) > 70]
-    match_percent = len(matched_qrs) / len(qr_list) if qr_list else 0
-    return matched_qrs, match_percent >= 0.6
-
-# Try to infer location from the top lines of the resume
+# Infer location from resume text
 def infer_location(text):
     lines = text.split('\n')
     for line in lines[:5]:
@@ -40,8 +37,20 @@ def infer_location(text):
             return line.lower()
     return ""
 
-# Score a resume against a job position
-def match_resume_to_position(text, position_row):
+# Match QRs semantically using cosine similarity
+def semantic_qr_match(text, qr_list, threshold):
+    matched_qrs = []
+    text_embedding = model.encode([text], convert_to_tensor=True)
+    for qr in qr_list:
+        qr_embedding = model.encode([qr], convert_to_tensor=True)
+        similarity = util.pytorch_cos_sim(qr_embedding, text_embedding).item()
+        if similarity >= threshold:
+            matched_qrs.append(qr.strip())
+    match_percent = len(matched_qrs) / len(qr_list) if qr_list else 0
+    return matched_qrs, match_percent
+
+# Match resume to position using semantic and rule-based logic
+def match_resume_to_position(text, position_row, threshold):
     location_score = 0
     experience_score = 0
     qr_score = 0
@@ -57,32 +66,23 @@ def match_resume_to_position(text, position_row):
         experience_score = 1
 
     qr_keywords = str(position_row['Essential QRs']).split(',')
-    matched_qrs, qr_met = match_essential_qrs(text, qr_keywords)
-    if qr_met:
+    matched_qrs, match_percent = semantic_qr_match(text, qr_keywords, threshold)
+    if match_percent >= 0.6:
         qr_score = 1
 
     total_score = location_score + experience_score + qr_score
     decision = "Use" if total_score == 3 else "Do Not Use"
 
-    return location_score, experience_score, qr_score, decision, matched_qrs
+    return location_score, experience_score, qr_score, decision, matched_qrs, int(match_percent * 100)
 
-# App title
-st.title("📄 Resume to Position Matcher (Enhanced)")
+# Streamlit UI
+st.title("📄 Resume to Position Matcher (Semantic Enhanced)")
 
-# File uploader for Excel checklist
-checklist_file = st.file_uploader(
-    "Upload Position Checklist (Excel with columns: Position Title, Essential QRs, Experience, Location)",
-    type=["xlsx"]
-)
+threshold = st.slider("Set QR Matching Threshold (Cosine Similarity)", 0.0, 1.0, 0.6, 0.01)
 
-# File uploader for multiple resume files
-resume_files = st.file_uploader(
-    "Upload Resumes (PDF/DOCX)",
-    type=["pdf", "docx"],
-    accept_multiple_files=True
-)
+checklist_file = st.file_uploader("Upload Position Checklist (Excel with columns: Position Title, Essential QRs, Experience, Location)", type=["xlsx"])
+resume_files = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
-# Main matching logic
 if checklist_file and resume_files:
     df_positions = pd.read_excel(checklist_file)
 
@@ -103,18 +103,16 @@ if checklist_file and resume_files:
         best_score = -1
         best_data = None
 
-        # Compare resume to each job position and keep the best match
         for _, row in df_positions.iterrows():
-            loc_score, exp_score, qr_score, decision, matched_qrs = match_resume_to_position(text, row)
+            loc_score, exp_score, qr_score, decision, matched_qrs, match_percent = match_resume_to_position(text, row, threshold)
             score = loc_score + exp_score + qr_score
             if score > best_score:
                 best_score = score
                 best_match = row['Position Title']
-                best_data = (loc_score, exp_score, qr_score, decision, matched_qrs)
+                best_data = (loc_score, exp_score, qr_score, decision, matched_qrs, match_percent)
 
-        # Store final decision and component scores
         if best_data:
-            loc_score, exp_score, qr_score, decision, matched_qrs = best_data
+            loc_score, exp_score, qr_score, decision, matched_qrs, match_percent = best_data
             results.append({
                 "File Name": resume.name,
                 "Best Match Position": best_match,
@@ -122,19 +120,15 @@ if checklist_file and resume_files:
                 "Experience Match": "✅" if exp_score else "❌",
                 "QR Match": "✅" if qr_score else "❌",
                 "Decision": decision,
+                "QR Match %": match_percent,
                 "Matched QRs": ", ".join(matched_qrs)
             })
 
-    # Display and download final results
     results_df = pd.DataFrame(results)
 
     st.write("### Resume to Position Matching Results")
     st.dataframe(results_df)
 
     csv = results_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download Results as CSV",
-        data=csv,
-        file_name="resume_position_matches.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download Results as CSV", data=csv, file_name="semantic_resume_matches.csv", mime="text/csv")
+
