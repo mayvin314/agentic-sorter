@@ -5,31 +5,29 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer, util
 import re
 
-# Load embedding model from Hugging Face
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Extract text from DOCX file
 def extract_text_from_docx(file):
     doc = Document(file)
     return " ".join(para.text for para in doc.paragraphs)
 
-# Extract text from PDF file
 def extract_text_from_pdf(file):
-    reader = PdfReader(file)
-    text = []
-    for page in reader.pages:
-        extracted = page.extract_text()
-        if extracted:
-            text.append(extracted)
-    return " ".join(text)
+    try:
+        reader = PdfReader(file)
+        text = []
+        for page in reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text.append(extracted)
+        return " ".join(text) if text else "[EMPTY]"
+    except Exception:
+        return "[UNREADABLE]"
 
-# Extract experience from resume text
 def extract_experience(text):
-    experience_matches = re.findall(r'(\d+)[+]?\\s+years?', text.lower())
+    experience_matches = re.findall(r'(\d+)[+]?\s+years?', text.lower())
     years = [int(y) for y in experience_matches if y.isdigit()]
     return max(years) if years else 0
 
-# Infer location from resume text
 def infer_location(text):
     lines = text.split('\n')
     for line in lines[:5]:
@@ -37,7 +35,6 @@ def infer_location(text):
             return line.lower()
     return ""
 
-# Match QRs semantically using cosine similarity
 def semantic_qr_match(text, qr_list, threshold):
     matched_qrs = []
     text_embedding = model.encode([text], convert_to_tensor=True)
@@ -49,7 +46,6 @@ def semantic_qr_match(text, qr_list, threshold):
     match_percent = len(matched_qrs) / len(qr_list) if qr_list else 0
     return matched_qrs, match_percent
 
-# Match resume to position using semantic and rule-based logic
 def match_resume_to_position(text, position_row, threshold):
     location_score = 0
     experience_score = 0
@@ -75,8 +71,7 @@ def match_resume_to_position(text, position_row, threshold):
 
     return location_score, experience_score, qr_score, decision, matched_qrs, int(match_percent * 100)
 
-# Streamlit UI
-st.title("📄 Resume to Position Matcher (Semantic Enhanced)")
+st.title("\ud83d\udcc4 Resume to Position Matcher (Semantic Enhanced)")
 
 threshold = st.slider("Set QR Matching Threshold (Cosine Similarity)", 0.0, 1.0, 0.6, 0.01)
 
@@ -97,6 +92,9 @@ if checklist_file and resume_files:
         elif resume.name.lower().endswith(".docx"):
             text = extract_text_from_docx(resume)
         else:
+            continue
+
+        if text in ["[EMPTY]", "[UNREADABLE]"]:
             continue
 
         best_match = None
@@ -131,4 +129,3 @@ if checklist_file and resume_files:
 
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Results as CSV", data=csv, file_name="semantic_resume_matches.csv", mime="text/csv")
-
